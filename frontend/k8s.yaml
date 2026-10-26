@@ -1,5 +1,5 @@
 # [CI/CD] 프론트(hisfrontend-nginx) Deployment + Service — hisfront-nginx-v1.0.yaml 에서 분리
-# image 의 __IMAGE__ 는 Jenkinsfile.frontend 가 sed 로 채운다. 이 파일을 직접 kubectl apply 하지 않는다.
+# image 의 __IMAGE__ 는 frontend/Jenkinsfile 이 sed 로 채운다. 이 파일을 직접 kubectl apply 하지 않는다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -1,5 +1,5 @@
 # [CI/CD] Nginx 설정(ConfigMap) + Deployment + Service(NodePort 30080 -> 서버 18090) — hisfront-nginx-v1.0.yaml 에서 분리
-# 자리표시자 없음. Jenkinsfile.nginx 가 그대로 apply 한 뒤 rollout restart 한다(Nginx 는 ConfigMap 변경을 스스로 다시 읽지 않는다).
+# 자리표시자 없음. nginx/Jenkinsfile 이 그대로 apply 한 뒤 rollout restart 한다(Nginx 는 ConfigMap 변경을 스스로 다시 읽지 않는다).
 apiVersion: v1
 kind: ConfigMap
 metadata:

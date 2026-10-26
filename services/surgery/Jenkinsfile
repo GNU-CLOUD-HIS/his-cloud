@@ -1,0 +1,156 @@
+// =====================================================================
+// [서비스 담당자용] surgery : 소스 받기 → jar 빌드 → 이미지 빌드·push → 쿠버네티스 배포
+//
+// 담당자는 아래 CFG 6줄만 채운다. 나머지는 팀 공통이라 고치지 않는다.
+// 이 파일은 "본인 Jenkins" 의 job 에서 Script Path = services/surgery/Jenkinsfile 로 쓴다.
+//
+// 미리 있어야 하는 것 (가이드 5장)
+//   - 본인 Jenkins Credentials: dockerhub (Username with password, 비밀번호 칸 = 본인 Docker Hub 액세스 토큰)
+//   - 서버: namespace his, his-common-config(인프라 담당), surgery-secret(이미 있음), redis-secret
+//   - 이 폴더의 k8s.yaml  (ConfigMap + Deployment + Service, image 자리에 __IMAGE__)
+// =====================================================================
+
+// ===== 담당자가 채우는 값 ============================================
+def CFG = [
+    svc       : 'surgery',                                                  // 쿠버네티스 이름(Deployment·Service). 바꾸지 않는다
+    repo      : 'TODO-https://github.com/SEOUL-IT-HIS/<저장소>.git',           // 서비스 소스 저장소
+    branch    : 'develop',                                                  // 18090 에 올릴 브랜치
+    dockerhub : 'TODO',                                                     // 본인 Docker Hub 아이디
+    agent     : 'TODO',                                                     // 본인 Jenkins 에 만든 원격 노드의 Label
+    owner     : 'TODO',                                                     // 배포 기록(rollout history)에 남길 이름
+]
+// =====================================================================
+
+// CFG 에 TODO 가 남아 있으면 노드를 기다리기 전에 바로 멈춘다 (agent 'TODO' 로는 영원히 대기하게 되므로)
+for (k in CFG.keySet()) {
+    if (CFG[k].toString().contains('TODO')) {
+        error "이 Jenkinsfile 의 CFG.${k} 를 채운다 (지금 값: ${CFG[k]})"
+    }
+}
+
+pipeline {
+    agent { label "${CFG.agent}" }
+
+    options {
+        disableConcurrentBuilds()                       // 같은 서비스가 동시에 두 번 배포되지 않게
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    triggers {
+        // 5분마다 변경 확인. 개인 PC 의 Jenkins 라 GitHub 웹훅은 닿지 않는다.
+        // his-cicd 는 "내 폴더(services/surgery/)" 가 바뀔 때만 반응하도록 job 설정에서 Included Regions 를 건다(가이드 6장)
+        pollSCM('H/5 * * * *')
+    }
+
+    environment {
+        NS = 'his'
+    }
+
+    stages {
+        stage('준비') {
+            steps {
+                script {
+                    env.SVC   = CFG.svc
+                    env.OWNER = CFG.owner
+                }
+                // kubectl 은 ~/bin 에 있다. Jenkins 가 실행하는 셸은 ~/bin 을 PATH 에 안 넣을 수 있어서 sh 마다 붙인다
+                sh '''
+                    export PATH="$HOME/bin:$PATH"
+                    which kubectl docker java
+                    test -f "services/$SVC/k8s.yaml" || { echo "services/$SVC/k8s.yaml 이 없다 (가이드 5-4)"; exit 1; }
+                    kubectl -n "$NS" get secret "$SVC-secret" >/dev/null || { echo "$SVC-secret 이 없다"; exit 1; }
+                    kubectl -n "$NS" get configmap his-common-config >/dev/null || { echo "his-common-config 가 없다 (인프라 담당 먼저)"; exit 1; }
+                '''
+            }
+        }
+
+        stage('남의 리소스 검사') {
+            // 팀 전원이 같은 클러스터·같은 namespace 에 배포한다.
+            // 내 k8s.yaml 이 내 서비스(ConfigMap·Deployment·Service) 말고 다른 것을 건드리면 여기서 멈춘다.
+            steps {
+                sh '''
+                    export PATH="$HOME/bin:$PATH"
+                    names=$(sed "s|__IMAGE__|busybox:dry-run|g" "services/$SVC/k8s.yaml" | kubectl apply --dry-run=server -o name -f -)
+                    echo "$names"
+                    if echo "$names" | grep -vqE "^(configmap/$SVC-config|deployment\\.apps/$SVC|service/$SVC)$"; then
+                        echo "내 서비스가 아닌 리소스가 k8s.yaml 에 있다. 확인할 것."
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+        stage('소스 받기') {
+            steps {
+                dir('src') {
+                    git url: CFG.repo, branch: CFG.branch
+                }
+                script {
+                    // 태그 = 빌드번호 + 커밋. Jenkins job 을 다시 만들어 빌드번호가 1로 돌아가도 태그가 겹치지 않는다
+                    def sha = sh(script: 'git -C src rev-parse --short=7 HEAD', returnStdout: true).trim()
+                    env.IMAGE = "${CFG.dockerhub}/his-${CFG.svc}:b${env.BUILD_NUMBER}-${sha}"
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} ${CFG.svc} ${sha}"
+                }
+            }
+        }
+
+        stage('jar 빌드') {
+            steps {
+                dir('src') {
+                    // --no-daemon: 공용 서버에 Gradle 데몬이 남아 메모리를 잡지 않게
+                    sh 'chmod +x gradlew && ./gradlew clean bootJar -x test --no-daemon'
+                }
+            }
+        }
+
+        stage('이미지 빌드·push') {
+            steps {
+                dir('src') {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub',
+                                                      usernameVariable: 'DH_USER',
+                                                      passwordVariable: 'DH_TOKEN')]) {
+                        // DOCKER_CONFIG: guest4 는 팀 공용 계정이라 로그인 정보를 ~/.docker 가 아니라 이 빌드 폴더에만 둔다
+                        sh '''
+                            export DOCKER_CONFIG="$WORKSPACE/.docker"
+                            mkdir -p "$DOCKER_CONFIG"
+                            echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
+                            docker build -t "$IMAGE" .
+                            docker push "$IMAGE"
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('배포') {
+            steps {
+                sh '''
+                    export PATH="$HOME/bin:$PATH"
+                    sed "s|__IMAGE__|$IMAGE|g" "services/$SVC/k8s.yaml" | kubectl apply -f -
+                    # 누가 어떤 빌드로 배포했는지 rollout history 에 남긴다 (팀원끼리 확인용)
+                    kubectl -n "$NS" annotate "deployment/$SVC" \
+                        kubernetes.io/change-cause="$IMAGE by $OWNER (Jenkins #$BUILD_NUMBER)" --overwrite
+                    # startupProbe 최대 5분 + admin 대기(initContainer)가 있으므로 넉넉하게
+                    kubectl -n "$NS" rollout status "deployment/$SVC" --timeout=420s
+                    kubectl -n "$NS" get pods -l "app=$SVC" -o wide
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            sh '''
+                export DOCKER_CONFIG="$WORKSPACE/.docker"
+                docker logout >/dev/null 2>&1 || true
+                rm -rf "$DOCKER_CONFIG"
+                # 서버 Docker 에 남은 "내 이미지"만 지운다 (Docker Hub 에는 남으므로 되돌리기 가능)
+                if [ -n "$IMAGE" ]; then docker rmi "$IMAGE" >/dev/null 2>&1 || true; fi
+            '''
+        }
+        failure {
+            echo "실패. 배포 단계에서 실패했다면 이전 Pod 가 계속 서비스 중이다(maxUnavailable 0). 원인: kubectl -n his describe pod -l app=${CFG.svc}"
+        }
+    }
+}

@@ -1,13 +1,27 @@
 // =====================================================================
-// 인프라: namespace 확인 → 공통 ConfigMap + Redis + Kafka + SeaweedFS(PVC 포함) 적용 → 기동 확인
-// job 이름: his-infra
+// [인프라 담당 1명] 공통 ConfigMap(his-common-config) + Redis + Kafka + SeaweedFS(PVC 포함) 적용 → 기동 확인
 // 빌드할 이미지가 없다(공식 이미지를 그대로 쓴다). 그래서 "CD 만" 있는 job 이다.
 //
+// 팀 전원의 서비스가 이 인프라를 쓴다. 실행 전에 팀에 알리고, 자동 실행(pollSCM)은 일부러 넣지 않았다.
 // 이 job 은 절대 delete 하지 않는다. apply 만 한다.
 // (common.yaml 에 SeaweedFS 의 PVC 가 들어 있어서 delete 하면 저장된 파일이 사라진다)
 // =====================================================================
+
+// ===== 담당자가 채우는 값 ============================================
+def CFG = [
+    agent : 'TODO',                                                         // 인프라 담당 본인 Jenkins 의 원격 노드 Label
+]
+// =====================================================================
+
+// CFG 에 TODO 가 남아 있으면 노드를 기다리기 전에 바로 멈춘다 (agent 'TODO' 로는 영원히 대기하게 되므로)
+for (k in CFG.keySet()) {
+    if (CFG[k].toString().contains('TODO')) {
+        error "이 Jenkinsfile 의 CFG.${k} 를 채운다 (지금 값: ${CFG[k]})"
+    }
+}
+
 pipeline {
-    agent { label 'remote-linux-node' }
+    agent { label "${CFG.agent}" }
 
     options {
         disableConcurrentBuilds()
@@ -35,7 +49,7 @@ pipeline {
             steps {
                 sh '''
                     export PATH="$HOME/bin:$PATH"
-                    kubectl apply -f k8s/common.yaml
+                    kubectl apply -f infra/common.yaml
                 '''
             }
         }

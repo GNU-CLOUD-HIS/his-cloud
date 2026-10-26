@@ -1,4 +1,4 @@
-# [CI/CD] image 의 __IMAGE__ 는 Jenkinsfile.backend 가 sed 로 채운다(jinki238/his-pharmacy:b<빌드번호>). 이 파일을 직접 kubectl apply 하지 않는다.
+# [CI/CD] image 의 __IMAGE__ 는 services/<서비스>/Jenkinsfile 이 sed 로 채운다(<담당자 Docker Hub>/his-pharmacy:b<빌드번호>-<커밋>). 이 파일을 직접 kubectl apply 하지 않는다.
 # [담당자별] pharmacy(약제) — 이 파일 하나가 ConfigMap + Deployment + Service 를 모두 담는다 (`---` 로 구분).
 #
 # 적용 순서 (서버에서, 이 순서대로):
