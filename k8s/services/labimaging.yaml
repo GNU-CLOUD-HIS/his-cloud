@@ -1,0 +1,146 @@
+# [CI/CD] image 의 __IMAGE__ 는 Jenkinsfile.backend 가 sed 로 채운다(jinki238/his-labimaging:b<빌드번호>). 이 파일을 직접 kubectl apply 하지 않는다.
+# [담당자별] lab-imaging — 이 파일 하나가 ConfigMap + Deployment + Service 를 모두 담는다 (`---` 로 구분).
+#
+# 적용 순서 (서버에서, 이 순서대로):
+#   1) Secret 을 명령으로 먼저 만든다. YAML 파일에는 비밀번호를 쓰지 않는다 (base64 는 암호화가 아니다).
+#   (guest4 는 셸 기록을 모두가 같이 보므로 비밀번호를 명령에 직접 치지 않는다)
+#   read -rsp "DB 비밀번호: " P; echo
+#   kubectl -n his create secret generic labimaging-secret --from-literal=DB_PASSWORD="$P"; unset P
+#   2) kubectl apply -f labimaging.yaml        <- 이 파일 하나만. 안에 든 3개가 위에서 아래 순서로 등록된다.
+#
+# 재배포: 이미지만 바꿀 때는 kubectl -n his set image deployment/labimaging labimaging=<새 이미지:태그>  (파일을 다시 apply 하지 않아도 된다)
+# 주의: kubectl delete -f labimaging.yaml 은 ConfigMap·Deployment·Service 를 한꺼번에 지운다 (Secret 은 파일 밖이라 남는다).
+
+# [담당자별] lab-imaging 만의 설정값. 공통 설정(Redis·Kafka·admin·DB 주소·시간대)은 his-common-config 에 있다.
+# 자기 서비스의 application.properties 를 열어 "공통에 없는 값"만 여기에 적는다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: labimaging-config
+  namespace: his
+data:
+  SPRING_DATASOURCE_USERNAME: "lab_imaging"                 # 이 서비스 전용 DB 계정
+  APP_PATIENT_SERVICE_BASE_URL: "http://patient:8087"       # properties 의 app.patient-service.base-url
+  APP_SEAWEEDFS_FILER_URL: "http://seaweedfs:8888"          # properties 의 app.seaweedfs.filer-url
+  # 영상오더 Kafka 수신은 처방코어와 합의 전이라 끈다(5차 검토 결과 F항).
+  APP_KAFKA_IMAGE_ORDER_ENABLED: "false"
+---
+# [담당자별] lab-imaging Deployment — 서비스를 실행하는 방법
+# 다른 서비스 담당자는 이 파일을 복사해서 아래 '바꿀 곳' 6군데만 고친다.
+#   (1) metadata.name  (2) labels app 값(3곳)  (3) image  (4) containerPort  (5) envFrom 의 configMap/secret 이름
+#   (6) resources(필요하면)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: labimaging                     # (1) 서비스 이름
+  namespace: his
+  labels:
+    app: labimaging                    # (2)
+spec:
+  replicas: 1                          # 처음엔 1개. 재처리 스케줄러·공통코드 캐시가 Pod 마다 있어서 늘리지 않는다
+  selector:
+    matchLabels:
+      app: labimaging                  # (2) 아래 template.labels 와 반드시 같아야 한다
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0                # 새 Pod 가 Ready 가 된 뒤에야 옛 Pod 를 내린다
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: labimaging                # (2)
+    spec:
+      enableServiceLinks: false        # Service 정보가 환경변수로 자동 주입되어 충돌하는 것을 막는다
+
+      # Compose 의 depends_on 에 해당하는 기능이 쿠버네티스에는 없다.
+      # admin 이 응답할 때까지 기다린 뒤 본 컨테이너를 시작한다.
+      # (admin 담당 서비스 자신은 이 initContainers 블록을 빼야 한다. 자기 자신을 기다리게 된다)
+      initContainers:
+        - name: wait-for-admin
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for admin:9191 ..."
+              # busybox 의 nc 가 -z 를 지원하지 않으면: until nc -w 2 admin 9191 </dev/null; do ...
+              until nc -z admin 9191; do sleep 3; done
+              echo "admin is up"
+
+      containers:
+        - name: labimaging
+          image: __IMAGE__   # (3) 본인 Docker Hub 아이디/이미지:태그 (latest 금지)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8085                    # (4) server.port 와 같아야 한다
+
+          envFrom:
+            - configMapRef:
+                name: his-common-config              # 공통 설정
+            - configMapRef:
+                name: labimaging-config              # (5) 내 서비스 설정
+            - secretRef:
+                name: labimaging-secret              # (5) 내 비밀번호
+
+          env:
+            # 키 하나만 꺼내 쓸 때는 secretKeyRef. Redis 비밀번호는 모두가 같은 Secret 을 쓴다
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
+            # Downward API: Pod 이름·노드 이름을 앱이 알 수 있다(로그 추적에 유용)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          # 시작값이다. 띄운 뒤 kubectl top pod 로 보고 조정한다.
+          # limits.memory 가 너무 작으면 OOMKilled(종료코드 137)로 재시작을 반복한다.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi              # JAVA_TOOL_OPTIONS 의 MaxRAMPercentage=70 -> 힙 약 700Mi
+              # cpu limit 은 일부러 생략: JVM 기동은 CPU 를 몰아 쓰는데 limit 이 낮으면 몇 배 느려진다
+
+          # actuator 가 없는 서비스는 포트(tcpSocket)로 확인한다.
+          startupProbe:                # 기동이 끝날 때까지 기다려 준다(최대 5분)
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:              # 실패하면 Service 의 대상에서 빠진다(재시작은 안 함)
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:               # 실패가 이어지면 컨테이너를 재시작한다
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+---
+# [담당자별] lab-imaging Service — 이 서비스에 붙는 고정 이름과 주소
+# Pod 는 다시 뜨면 IP 가 바뀐다. Service 는 바뀌지 않는 '이름'을 준다.
+# 프론트 이미지에 http://labimaging:8085 가 굳어 있으므로 이름과 포트를 바꾸지 않는다(개발표준가이드 11.6).
+apiVersion: v1
+kind: Service
+metadata:
+  name: labimaging          # 클러스터 안 주소: http://labimaging:8085
+  namespace: his
+spec:
+  type: ClusterIP           # 클러스터 안에서만 접근 (외부 노출 금지)
+  selector:
+    app: labimaging         # 이 라벨을 가진 Pod 로 트래픽을 보낸다
+  ports:
+    - name: http
+      port: 8085            # Service 가 받는 포트(다른 서비스·프론트가 부르는 번호)
+      targetPort: http      # Pod 의 containerPort 이름(http = 8085)

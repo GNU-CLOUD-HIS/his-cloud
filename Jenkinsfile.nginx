@@ -1,0 +1,57 @@
+// =====================================================================
+// Nginx: 설정(ConfigMap) + Deployment + Service(NodePort 30080) 적용 → 재시작 → 18090 응답 확인
+// job 이름: his-nginx
+// 공식 이미지(nginxinc/nginx-unprivileged)를 쓰므로 빌드는 없다. 바뀌는 것은 라우팅 설정뿐이다.
+// =====================================================================
+pipeline {
+    agent { label 'remote-linux-node' }
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 10, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        NS = 'his'
+    }
+
+    stages {
+        stage('사전 확인') {
+            steps {
+                sh '''
+                    export PATH="$HOME/bin:$PATH"
+                    # 프론트가 없으면 화면이 502 가 된다. 먼저 his-frontend 를 돌린다
+                    kubectl -n "$NS" get deploy hisfrontend-nginx >/dev/null || { echo "hisfrontend-nginx 가 없다. his-frontend 먼저"; exit 1; }
+                    # resolver 값(kube-dns 주소)이 nginx.yaml 과 같은지 확인
+                    kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}{"\\n"}'
+                '''
+            }
+        }
+
+        stage('적용') {
+            steps {
+                sh '''
+                    export PATH="$HOME/bin:$PATH"
+                    kubectl apply -f k8s/nginx.yaml
+                    # Nginx 는 ConfigMap 이 바뀌어도 스스로 다시 읽지 않는다 -> 새 Pod 로 교체(무중단 롤링)
+                    kubectl -n "$NS" rollout restart deployment/nginx
+                    kubectl -n "$NS" rollout status deployment/nginx --timeout=120s
+                '''
+            }
+        }
+
+        stage('18090 응답 확인') {
+            steps {
+                sh '''
+                    # 서버 자신에서 18090 -> minikube 30080 -> nginx 경로 전체를 확인한다
+                    for path in /nginx-health / ; do
+                        code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:18090$path")
+                        echo "$path -> $code"
+                        [ "$code" = "200" ] || [ "$code" = "307" ] || [ "$code" = "308" ] || exit 1
+                    done
+                '''
+            }
+        }
+    }
+}

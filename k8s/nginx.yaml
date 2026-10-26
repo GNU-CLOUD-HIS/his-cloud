@@ -1,0 +1,162 @@
+# [CI/CD] Nginx 설정(ConfigMap) + Deployment + Service(NodePort 30080 -> 서버 18090) — hisfront-nginx-v1.0.yaml 에서 분리
+# 자리표시자 없음. Jenkinsfile.nginx 가 그대로 apply 한 뒤 rollout restart 한다(Nginx 는 ConfigMap 변경을 스스로 다시 읽지 않는다).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: his
+data:
+  his.conf: |
+    # /api/** 와 /files/** 를 Nginx 가 직접 해당 서비스로 보낸다. 그 외(화면)는 새 프론트(hisfrontend-nginx)로.
+    # next.config.ts 의 rewrites() 가 하던 일을 그대로 옮긴 것이다.
+
+    # 쿠버네티스 안의 DNS 서버(kube-dns Service 의 CLUSTER-IP). 아래 proxy_pass 가 "변수"를 써서 요청이 올 때 이름을 찾기 때문에 필요하다.
+    # 이 클러스터에서 확인한 값: kubectl -n kube-system get svc kube-dns  ->  10.96.0.10  (다르게 나오면 이 값을 바꾼다)
+    resolver 10.96.0.10 valid=10s ipv6=off;
+
+    # ★ 라우팅 표: 요청 경로($uri)가 왼쪽 패턴에 맞으면 오른쪽 서비스로 보낸다. (next.config.ts rewrites 와 같은 규칙)
+    #   - 이름은 Service 이름 + 네임스페이스(his) 까지 쓴다. (Nginx 의 resolver 는 짧은 이름 "billing" 을 못 찾는다)
+    #   - 주소 끝에 "/" 를 붙이지 않는다. 붙이면 요청 경로가 바뀐다.
+    #   - 위에서부터 먼저 맞는 것이 적용된다. 아무 데도 안 맞으면 default (admin) — Next 의 마지막 규칙 /api/:path* 와 같다.
+    map $uri $api_upstream {
+        default                     http://admin.his.svc.cluster.local:9191;
+        ~^/api/outpatient(/|$)      http://outpatient.his.svc.cluster.local:8088;
+        ~^/api/emergency(/|$)       http://emergency.his.svc.cluster.local:8089;
+        ~^/api/patient(/|$)         http://patient.his.svc.cluster.local:8087;
+        ~^/api/lab-imaging(/|$)     http://labimaging.his.svc.cluster.local:8085;
+        ~^/api/surgery(/|$)         http://surgery.his.svc.cluster.local:8084;
+        ~^/api/billing(/|$)         http://billing.his.svc.cluster.local:8081;
+        ~^/api/reception(/|$)       http://reception.his.svc.cluster.local:8083;
+        ~^/api/inpatient(/|$)       http://inpatient.his.svc.cluster.local:8086;
+        ~^/api/pharmacy(/|$)        http://pharmacy.his.svc.cluster.local:8082;
+    }
+
+    log_format his '$remote_addr "$request" status=$status time=${request_time}s upstream=$upstream_addr';
+
+    # 압축: 텍스트 계열 응답만. (Next 는 자기 응답을 이미 압축해서 보내므로 그건 건드리지 않는다)
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/javascript text/xml application/xml image/svg+xml;
+
+    server_tokens off;
+    server {
+        listen 8080;
+        server_name _;
+        access_log /var/log/nginx/access.log his;
+
+        # 업로드 한도. 백엔드(Spring 기본 파일 1MB / 요청 10MB)의 한도와 둘 중 작은 쪽이 적용된다.
+        client_max_body_size 20m;
+
+        location = /nginx-health {
+            access_log off;
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        # --- API: 위의 map 표로 서비스를 고른다 ---
+        location /api/ {
+            proxy_pass $api_upstream;                 # 주소에 경로가 없으므로 요청 경로가 그대로 전달된다
+            proxy_http_version 1.1;
+            proxy_set_header Host              $http_host;
+            proxy_set_header Origin            "";     # 백엔드로 Origin 을 보내지 않음 -> CORS 검사 자체가 일어나지 않음
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Host  $http_host;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout    60s;
+        }
+
+        # --- 직원 프로필 사진 등 파일: /files/emp-photo/a.jpg -> 터미널 SeaweedFS 의 /emp-photo/a.jpg ---
+        # 직원 사진 저장소를 터미널 SeaweedFS 하나로 통일했다. (admin 의 SEAWEED_ENDPOINT 와 같은 주소)
+        location /files/ {
+            set $seaweed http://192.168.49.1:18891;
+            rewrite ^/files/(.*)$ /$1 break;          # 앞의 /files 를 떼고
+            proxy_pass $seaweed;                      # 터미널 SeaweedFS S3 로 보낸다
+            proxy_http_version 1.1;
+            proxy_set_header Host 192.168.49.1:18891; # 이 주소로 직접 요청했을 때 동작을 확인한 Host 값
+            proxy_connect_timeout 5s;
+            proxy_read_timeout    60s;
+        }
+
+        # --- 나머지(화면 HTML, /_next/static 등)는 Next ---
+        location / {
+            set $front http://hisfrontend-nginx.his.svc.cluster.local:3000;   # rewrites 없는 새 프론트(hisfrontend-nginx)
+            proxy_pass $front;
+            proxy_http_version 1.1;
+            proxy_set_header Host              $http_host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Host  $http_host;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout    60s;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: his
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      enableServiceLinks: false          # 서비스 주소 환경변수를 주입하지 않는다 (Nginx 에 불필요)
+      containers:
+        - name: nginx
+          # root 없이 8080 으로 뜨는 공식 이미지. 학습용이라 alpine 태그 사용.
+          image: nginxinc/nginx-unprivileged:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d     # 이 폴더를 ConfigMap 으로 통째로 대체 (기본 default.conf 는 사라진다)
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /nginx-health
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /nginx-health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: conf
+          configMap:
+            name: nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: his
+spec:
+  type: NodePort
+  selector:
+    app: nginx
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080        # 18090 이 이 포트(minikube 30080 -> 18090)로 들어온다. 30090 으로 바꾸면 18090 이 끊긴다.
