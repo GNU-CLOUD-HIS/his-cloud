@@ -9,9 +9,9 @@
 
 | 대상 | 폴더 | 담당자 | 자동 배포(pollSCM) |
 |---|---|---|---|
-| 인프라: 공통 설정 + Redis·Kafka·SeaweedFS | `infra/` | (정하기) | 없음, 담당자가 공지 후 직접 실행 |
-| nginx (18090 입구) | `nginx/` | (정하기, 인프라 담당 겸임 권장) | 없음, 담당자가 직접 실행 |
-| 프론트 | `frontend/` | (정하기) | 있음 |
+| 인프라: 공통 설정 + Redis·Kafka·SeaweedFS | `infra/` | 강진기,권수근 | 없음, 담당자가 공지 후 직접 실행 |
+| nginx (18090 입구) | `nginx/` | 김가영 | 없음, 담당자가 직접 실행 |
+| 프론트 | `frontend/` | 권수근 | 있음 |
 | admin | `services/admin/` | 권수근 | 있음 |
 | patient | `services/patient/` | 홍예진 | 있음 |
 | lab-imaging | `services/labimaging/` | 강진기 | 있음 |
