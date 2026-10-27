@@ -16,8 +16,8 @@ def CFG = [
     repo      : 'https://github.com/SEOUL-IT-HIS/billingservice.git',           // 서비스 소스 저장소
     branch    : 'develop',                                                  // 18090 에 올릴 브랜치
     dockerhub : 'whatyourname22',                                                     // 본인 Docker Hub 아이디
-    agent     : 'guest4-linux',                                                     // 본인 Jenkins 에 만든 원격 노드의 Label
-    owner     : 'billing-service',                                                     // 배포 기록(rollout history)에 남길 이름
+    agent     : 'billing-agent',                                                     // 본인 Jenkins 에 만든 원격 노드의 Label
+    owner     : 'billing-service',                                                  // 배포 기록(rollout history)에 남길 이름
 ]
 // =====================================================================
 
@@ -150,16 +150,29 @@ pipeline {
             '''
         }
         failure {
+            // 배포가 안 끝났을 때 원인을 이 로그에서 바로 보게 Pod 상태·이벤트·앱 로그를 찍는다
             sh '''
                 export PATH="$HOME/bin:$PATH"
                 echo "=== pods ==="
-                kubectl -n his get pods -l app=billing -o wide || true
-                echo "=== describe ==="
-                kubectl -n his describe pod -l app=billing | tail -60 || true
-                echo "=== logs ==="
-                kubectl -n his logs -l app=billing --all-containers --tail=80 || true
+                kubectl -n "$NS" get pods -l "app=$SVC" -o wide || true
+                # 가장 최근에 만들어진 Pod(= 이번 배포의 새 Pod) 하나만 본다
+                POD=$(kubectl -n "$NS" get pods -l "app=$SVC" --sort-by=.metadata.creationTimestamp -o name | tail -1)
+                echo "=== 새 Pod: $POD ==="
+                echo "=== 이벤트 ==="
+                kubectl -n "$NS" describe "$POD" | sed -n '/^Events:/,$p' | tail -20 || true
+                echo "=== 앱 로그: 원인 줄만 (Caused by / ERROR / 연결) ==="
+                kubectl -n "$NS" logs "$POD" 2>&1 | grep -E "APPLICATION FAILED|Caused by|ERROR|HikariPool|ORA-|UnknownHost|Connection refused|Description:|Action:" | head -40 || true
+                echo "=== 앱 로그: 처음 30줄 ==="
+                kubectl -n "$NS" logs "$POD" 2>&1 | head -30 || true
+                # 새 Pod 는 DB 접속이 안 되는데 옛 Pod 는 된다면 설정이 다르다는 뜻이라, 둘을 비교할 수 있게 찍는다 (비밀번호 줄은 제외)
+                echo "=== ReplicaSet 목록 ==="
+                kubectl -n "$NS" get rs -l "app=$SVC" -o wide || true
+                echo "=== his-common-config 의 DB·JPA 관련 키 ==="
+                kubectl -n "$NS" get configmap his-common-config -o yaml | grep -iE "datasource|jpa|dialect|oracle" | grep -iv password || true
+                echo "=== billing-secret 의 키 이름 (값은 안 찍음) ==="
+                kubectl -n "$NS" get secret "$SVC-secret" -o go-template='{{range $k, $v := .data}}{{$k}}{{"\\n"}}{{end}}' || true
             '''
-            echo "실패. ...(기존 줄 그대로)"
+            echo "실패. 배포 단계에서 실패했다면 이전 Pod 가 계속 서비스 중이다(maxUnavailable 0). 원인: kubectl -n his describe pod -l app=${CFG.svc}"
         }
     }
 }
