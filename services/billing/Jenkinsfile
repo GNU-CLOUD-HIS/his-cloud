@@ -150,7 +150,16 @@ pipeline {
             '''
         }
         failure {
-            echo "실패. 배포 단계에서 실패했다면 이전 Pod 가 계속 서비스 중이다(maxUnavailable 0). 원인: kubectl -n his describe pod -l app=${CFG.svc}"
+            sh '''
+                export PATH="$HOME/bin:$PATH"
+                echo "=== pods ==="
+                kubectl -n his get pods -l app=billing -o wide || true
+                echo "=== describe ==="
+                kubectl -n his describe pod -l app=billing | tail -60 || true
+                echo "=== logs ==="
+                kubectl -n his logs -l app=billing --all-containers --tail=80 || true
+            '''
+            echo "실패. ...(기존 줄 그대로)"
         }
     }
 }
