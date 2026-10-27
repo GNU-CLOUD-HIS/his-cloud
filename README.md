@@ -15,7 +15,7 @@
 | admin | `services/admin/` | 권수근 | 있음 |
 | patient | `services/patient/` | 홍예진 | 있음 |
 | lab-imaging | `services/labimaging/` | 강진기 | 있음 |
-| pharmacy | `services/pharmacy/` | 강진기 | 있음 |
+| pharmacy | `services/pharmacy/` | 강진기,이우성 | 있음 |
 | billing | `services/billing/` | 정대훈 | 있음 |
 | reception | `services/reception/` | 최인경 | 있음 |
 | surgery | `services/surgery/` | (담당자) | 있음 |
