@@ -6,9 +6,9 @@
 def CFG = [
     repo      : 'https://github.com/SEOUL-IT-HIS/hisfrontend.git',
     branch    : 'nginx',                                                    // [확인 필요] 지금 18090 의 v2.4-nginx 를 만든 브랜치. 팀 통합 후에는 develop
-    dockerhub : 'TODO',                                                     // 프론트 담당 본인 Docker Hub 아이디
-    agent     : 'TODO',                                                     // 프론트 담당 본인 Jenkins 의 원격 노드 Label
-    owner     : 'TODO',                                                     // 배포 기록에 남길 이름
+    dockerhub : 'youngeiya',                                                // 프론트 담당 본인 Docker Hub 아이디
+    agent     : 'remote-linux-agent',                                                // 프론트 담당 본인 Jenkins 의 원격 노드 Label
+    owner     : 'youngeiya',                                                // 배포 기록에 남길 이름
 ]
 // =====================================================================
 
