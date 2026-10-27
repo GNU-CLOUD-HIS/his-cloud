@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billing-config
+  namespace: his
+data:
+  SPRING_DATASOURCE_USERNAME: "billing"
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
+  SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+
+  # 브라우저 요청을 허용할 출처 목록
+  APP_CORS_ALLOWED_ORIGIN_PATTERNS: "http://localhost:3000,http://seoulit.pe.kr:18080,http://seoulit.pe.kr:18090,http://117.16.154.233:18080,http://117.16.154.233:18090"
+
+  # 카카오페이 결제 후 돌아올 주소
+  KAKAOPAY_APPROVAL_URL: "http://seoulit.pe.kr:18090/billing/payment/kakaopay/return"
+  KAKAOPAY_CANCEL_URL: "http://seoulit.pe.kr:18090/billing/payment/kakaopay/cancel"
+  KAKAOPAY_FAIL_URL: "http://seoulit.pe.kr:18090/billing/payment/kakaopay/fail"
+
+  APP_ADMIN_SERVICE_HOST: "admin"
+  APP_ADMIN_SERVICE_PORT: "9191"
+  APP_PAIENT_SERVICE_HOST: "patient"
+  APP_PAIENT_SERVICE_PORT: "8087"
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing
+  namespace: his
+  labels:
+    app: billing
+spec:
+  replicas: 1                         # billing Pod 1개 실행
+  selector:
+    matchLabels:
+      app: billing
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0               # 교체 중 기존 Pod 유지
+      maxSurge: 1                     # 새 Pod 1개 추가 허용
+
+  template:
+    metadata:
+      labels:
+        app: billing
+    spec:
+      enableServiceLinks: false
+
+      # admin이 실행된 다음 billing 시작
+      # initContainers:
+      #   - name: wait-for-admin
+      #     image: busybox:1.36
+      #     command:
+      #       - sh
+      #       - -c
+      #       - |
+      #         echo "waiting for admin:9191 ..."
+      #         until nc -z admin 9191; do sleep 3; done
+      #         echo "admin is up"
+
+      containers:
+        - name: billing
+          image: __IMAGE__            # Jenkins가 빌드한 이미지로 치환
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8081
+
+          # 공통 설정 → billing 설정 → 비밀 설정
+          envFrom:
+            - configMapRef:
+                name: his-common-config
+            - configMapRef:
+                name: billing-config
+            - secretRef:
+                name: billing-secret
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+
+          # 시작 시 최대 약 5분 동안 기동 확인
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+
+          # 요청을 받을 준비가 됐는지 확인
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # 실행 중 포트 응답 확인
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing
+  namespace: his
+spec:
+  type: ClusterIP
+  selector:
+    app: billing
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
