@@ -12,16 +12,16 @@
 | 인프라: 공통 설정 + Redis·Kafka·SeaweedFS | `infra/` | (정하기) | 없음, 담당자가 공지 후 직접 실행 |
 | nginx (18090 입구) | `nginx/` | (정하기, 인프라 담당 겸임 권장) | 없음, 담당자가 직접 실행 |
 | 프론트 | `frontend/` | (정하기) | 있음 |
-| admin | `services/admin/` | (admin·patient 담당 1명) | 있음 |
-| patient | `services/patient/` | (admin·patient 담당 1명) | 있음 |
+| admin | `services/admin/` | 권수근 | 있음 |
+| patient | `services/patient/` | 홍예진 | 있음 |
 | lab-imaging | `services/labimaging/` | 강진기 | 있음 |
 | pharmacy | `services/pharmacy/` | 강진기 | 있음 |
-| billing | `services/billing/` | (담당자) | 있음 |
-| reception | `services/reception/` | (담당자) | 있음 |
+| billing | `services/billing/` | 정대훈 | 있음 |
+| reception | `services/reception/` | 최인경 | 있음 |
 | surgery | `services/surgery/` | (담당자) | 있음 |
-| inpatient | `services/inpatient/` | (담당자) | 있음 |
-| outpatient | `services/outpatient/` | (담당자) | 있음 |
-| emergency | `services/emergency/` | (담당자) | 있음 |
+| inpatient | `services/inpatient/` | 김가영 | 있음 |
+| outpatient | `services/outpatient/` | 서호령 | 있음 |
+| emergency | `services/emergency/` | 박상민 | 있음 |
 
 ## 팀 규칙 (6가지)
 
