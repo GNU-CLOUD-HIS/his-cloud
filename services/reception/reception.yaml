@@ -1,0 +1,149 @@
+# [담당자별] reception — 이 파일 하나가 ConfigMap + Deployment + Service 를 모두 담는다 (`---` 로 구분).
+# service-labimaging/labimaging.yaml 을 reception-service 기준으로 바꾼 것이다.
+#
+# 적용 순서 (서버에서, 이 순서대로):
+#   1) Secret 을 명령으로 먼저 만든다. YAML 파일에는 비밀번호를 쓰지 않는다 (base64 는 암호화가 아니다).
+#   (guest4 는 셸 기록을 모두가 같이 보므로 비밀번호를 명령에 직접 치지 않는다)
+#   read -rsp "DB 비밀번호: " P; echo
+#   kubectl -n his create secret generic reception-secret --from-literal=SPRING_DATASOURCE_PASSWORD="$P"; unset P
+#   2) kubectl apply -f reception.yaml        <- 이 파일 하나만. 안에 든 3개가 위에서 아래 순서로 등록된다.
+#
+# !! labimaging 과 다른 점: Secret 키 이름 !!
+#   labimaging 은 properties 에 ${DB_PASSWORD} 자리표시자가 있어서 키 이름이 DB_PASSWORD 다.
+#   reception 의 application.yml 은 spring.datasource.password 를 값으로 직접 적어 두었고 자리표시자가 없다.
+#   그래서 키를 Spring 환경변수 이름 SPRING_DATASOURCE_PASSWORD 로 만들어야 jar 안의 값을 덮어쓴다.
+#   (DB_PASSWORD 로 만들면 에러 없이 무시되고 jar 안의 옛 값으로 접속한다)
+#
+# 재배포: 이미지만 바꿀 때는 kubectl -n his set image deployment/reception reception=<새 이미지:태그>  (파일을 다시 apply 하지 않아도 된다)
+# 주의: kubectl delete -f reception.yaml 은 ConfigMap·Deployment·Service 를 한꺼번에 지운다 (Secret 은 파일 밖이라 남는다).
+
+# [담당자별] reception 만의 설정값. 공통 설정(Redis·Kafka·DB 주소·시간대)은 his-common-config 에 있다.
+# 공통에 있어도 reception 의 키 이름과 다른 것은 여기에 reception 의 이름으로 다시 적는다.
+#   - 공통의 APP_ADMIN_SERVICE_BASE_URL 은 reception 이 읽지 않는다 (reception 의 키는 admin.url -> ADMIN_URL)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reception-config
+  namespace: his
+data:
+  SPRING_DATASOURCE_USERNAME: "reception"                 # 이 서비스 전용 DB 계정 (application.yml 의 spring.datasource.username)
+  # 다른 서비스 주소. application.yml 의 기본값은 개발 PC 주소라서 반드시 덮어쓴다 (안 덮으면 에러 없이 옛 주소로 접속한다).
+  CB2_URL: "http://patient:8087"                          # application.yml 의 cb2.url        (환자 서비스)
+  ADMIN_URL: "http://admin:9191"                          # application.yml 의 admin.url      (공통코드·직원 목록)
+  EMERGENCY_URL: "http://emergency:8089"                  # application.yml 의 emergency.url  (응급 서비스)
+  OUTPATIENT_URL: "http://outpatient:8088"                # application.yml 의 outpatient.url (외래 서비스)
+---
+# [담당자별] reception Deployment — 서비스를 실행하는 방법
+# labimaging.yaml 에서 바꾼 곳: (1) 이름 (2) app 라벨 (3) 이미지 (4) containerPort 8083 (5) configMap/secret 이름
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reception                      # (1) 서비스 이름
+  namespace: his
+  labels:
+    app: reception                     # (2)
+spec:
+  replicas: 1                          # 처음엔 1개. 공통코드 캐시(@Scheduled 5분 갱신)와 Kafka 컨슈머 그룹이 Pod 마다 있어서 늘리지 않는다
+  selector:
+    matchLabels:
+      app: reception                   # (2) 아래 template.labels 와 반드시 같아야 한다
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0                # 새 Pod 가 Ready 가 된 뒤에야 옛 Pod 를 내린다
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: reception                 # (2)
+    spec:
+      enableServiceLinks: false        # Service 정보가 환경변수로 자동 주입되어 충돌하는 것을 막는다
+
+      # admin 이 응답할 때까지 기다린 뒤 본 컨테이너를 시작한다.
+      # reception 은 기동 때 admin 에서 공통코드(진료과 등)를 읽어 캐시에 적재하므로 admin 이 먼저 떠 있어야 한다.
+      initContainers:
+        - name: wait-for-admin
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for admin:9191 ..."
+              until nc -z admin 9191; do sleep 3; done
+              echo "admin is up"
+
+      containers:
+        - name: reception
+          image: __IMAGE__    # (3) 본인 Docker Hub 아이디/이미지:태그 (latest 금지)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8083                    # (4) server.port(8083)와 같아야 한다. Dockerfile 도 --server.port=8083
+
+          envFrom:
+            - configMapRef:
+                name: his-common-config              # 공통 설정
+            - configMapRef:
+                name: reception-config               # (5) 내 서비스 설정
+            - secretRef:
+                name: reception-secret               # (5) 내 비밀번호 (키: SPRING_DATASOURCE_PASSWORD)
+
+          env:
+            # Redis 비밀번호는 모두가 같은 Secret 을 쓴다 (application.yml 의 ${REDIS_PASSWORD:})
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
+            # Downward API: Pod 이름·노드 이름을 앱이 알 수 있다(로그 추적에 유용)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          # 시작값이다. 띄운 뒤 kubectl top pod 로 보고 조정한다.
+          # limits.memory 가 너무 작으면 OOMKilled(종료코드 137)로 재시작을 반복한다.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi              # JAVA_TOOL_OPTIONS 의 MaxRAMPercentage=70 -> 힙 약 700Mi
+              # cpu limit 은 일부러 생략: JVM 기동은 CPU 를 몰아 쓰는데 limit 이 낮으면 몇 배 느려진다
+
+          # reception 은 actuator 가 없어서 포트(tcpSocket)로 확인한다.
+          startupProbe:                # 기동이 끝날 때까지 기다려 준다(최대 5분)
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:              # 실패하면 Service 의 대상에서 빠진다(재시작은 안 함)
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:               # 실패가 이어지면 컨테이너를 재시작한다
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+---
+# [담당자별] reception Service — 이 서비스에 붙는 고정 이름과 주소
+# 프론트 이미지에 http://reception:8083 이 굳어 있으므로 이름과 포트를 바꾸지 않는다(개발표준가이드 11.6).
+apiVersion: v1
+kind: Service
+metadata:
+  name: reception           # 클러스터 안 주소: http://reception:8083
+  namespace: his
+spec:
+  type: ClusterIP           # 클러스터 안에서만 접근 (외부 노출 금지)
+  selector:
+    app: reception          # 이 라벨을 가진 Pod 로 트래픽을 보낸다
+  ports:
+    - name: http
+      port: 8083            # Service 가 받는 포트(다른 서비스·프론트가 부르는 번호)
+      targetPort: http      # Pod 의 containerPort 이름(http = 8083)
