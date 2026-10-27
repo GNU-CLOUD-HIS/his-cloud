@@ -21,7 +21,7 @@ metadata:
 data:
   SPRING_DATASOURCE_USERNAME: "lab_imaging"                 # 이 서비스 전용 DB 계정
   APP_PATIENT_SERVICE_BASE_URL: "http://patient:8087"       # properties 의 app.patient-service.base-url
-  APP_SEAWEEDFS_FILER_URL: "http://seaweedfs:8888"          # properties 의 app.seaweedfs.filer-url
+  APP_SEAWEEDFS_FILER_URL: "http://192.168.49.1:8888"       # properties 의 app.seaweedfs.filer-url. 서버(터미널) SeaweedFS filer 를 쓴다(18090 실제 값, 2026-10-26 kubectl diff 로 확인). 클러스터 안 seaweedfs:8888 이 아님
   # 영상오더 Kafka 수신은 처방코어와 합의 전이라 끈다(5차 검토 결과 F항).
   APP_KAFKA_IMAGE_ORDER_ENABLED: "false"
 ---
