@@ -107,6 +107,12 @@ spec:
                 secretKeyRef:
                   name: billing-secret
                   key: BILLING_DB_PASSWORD
+            # Redis(세션)에 비밀번호가 걸려 있다. 팀 공용 redis-secret 의 REDIS_PASSWORD 를 Spring 이 읽는 이름으로 넘긴다
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
 
           resources:
             requests:
