@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: outpatient-config
+  namespace: his
+data:
+  SPRING_DATASOURCE_USERNAME: "outpatient"
+
+  # 다른 서비스 주소 (Service 이름:포트, 가이드 6-4. admin 은 9191 확정)
+  ADMIN_BASE_URL: "http://admin:9191"
+  PATIENT_BASE_URL: "http://patient:8087"
+  LAB_BASE_URL: "http://labimaging:8085"
+  PHARMACY_BASE_URL: "http://pharmacy:8082"
+
+  # 실제 연동 (기본값이 true=stub 이므로 반드시 명시)
+  ADMIN_STUB_ENABLED: "false"
+  PATIENT_STUB_ENABLED: "false"
+  LAB_STUB_ENABLED: "false"
+  PHARMACY_STUB_ENABLED: "false"
+
+  # Kafka 연동 (현재 application-local.yml 과 동일하게 true)
+  LAB_MESSAGING_ENABLED: "true"
+  PHARMACY_MESSAGING_ENABLED: "true"
+  RECEPTION_MESSAGING_ENABLED: "true"
+  ADMISSION_MESSAGING_ENABLED: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outpatient
+  namespace: his
+  labels:
+    app: outpatient
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: outpatient
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: outpatient
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: wait-for-admin
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z admin 9191; do sleep 3; done
+      containers:
+        - name: outpatient
+          image: seohoryeong/his-outpatient:__IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8088
+          envFrom:
+            - configMapRef: { name: his-common-config }
+            - configMapRef: { name: outpatient-config }
+            - secretRef:    { name: outpatient-secret }
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: redis-secret, key: REDIS_PASSWORD }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { memory: 1Gi }
+          startupProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: outpatient
+  namespace: his
+spec:
+  type: ClusterIP
+  selector:
+    app: outpatient
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http
