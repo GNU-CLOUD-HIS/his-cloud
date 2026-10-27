@@ -18,8 +18,29 @@ data:
 
   APP_ADMIN_SERVICE_HOST: "admin"
   APP_ADMIN_SERVICE_PORT: "9191"
-  APP_PATIENT_SERVICE_HOST: "patient"
-  APP_PATIENT_SERVICE_PORT: "8087"
+  APP_PAIENT_SERVICE_HOST: "patient"
+  APP_PAIENT_SERVICE_PORT: "8087"
+
+  # application.properties 는 .gitignore 라 이미지에 들어가지 않는다. 앱이 필요로 하는 값을 환경변수로 넣는다
+  # (비밀번호·키는 여기 두지 않고 아래 Deployment 의 env / billing-secret 에서 가져온다)
+  SERVER_PORT: "8081"                                   # 안 넣으면 8080 으로 떠서 probe(8081)가 계속 실패한다
+  SPRING_APPLICATION_NAME: "billingservice"
+  SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: "org.hibernate.dialect.OracleDialect"
+  MYBATIS_MAPPER_LOCATIONS: "classpath:/mapper/*.xml"
+  MYBATIS_CONFIGURATION_MAP_UNDERSCORE_TO_CAMEL_CASE: "true"
+  SERVER_SERVLET_SESSION_TIMEOUT: "10h"
+  APP_KAFKA_ENABLED: "true"
+  SPRING_KAFKA_CONSUMER_GROUP_ID: "billing-service"
+  BILLING_CHARGE_TOPIC_EXAM: "exam-billing-charge"
+  BILLING_CHARGE_TOPIC_INPATIENT: "inpatient-billing-charge"
+  BILLING_SETTLEMENT_TOPIC_COMPLETED: "settlement.completed"
+  BILLING_MASTER_SOURCE_SERVICE_CODE_GROUP_ID: "918dd50f-ad11-4647-a484-a14fe599064c"
+  BILLING_MASTER_CATEGORY_CODE_GROUP_ID: "ca4a6a69-3f9f-4f70-bf7d-5af42df3a11c"
+  BILLING_MASTER_INSURANCE_TYPE_CODE_GROUP_ID: "0b464349-e9f7-4607-ad5d-ebe968b7e32f"
+  BILLING_CHARGE_INSURANCE_TYPE_NON_INS_CODE_ID: "683e8354-9bde-4665-951b-a0eb9e2f7fe5"
+  ADMIN_SERVICE_BASE_URL: "http://admin:9191"
+  PATIENT_SERVICE_BASE_URL: "http://patient:8087"
+  KAKAOPAY_CID: "TC0ONETIME"
 
 ---
 
@@ -78,6 +99,14 @@ spec:
                 name: billing-config
             - secretRef:
                 name: billing-secret
+
+          # DB 비밀번호: billing-secret 의 BILLING_DB_PASSWORD 를 Spring 이 읽는 이름(SPRING_DATASOURCE_PASSWORD)으로 넘긴다
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: billing-secret
+                  key: BILLING_DB_PASSWORD
 
           resources:
             requests:
