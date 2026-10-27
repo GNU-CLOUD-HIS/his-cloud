@@ -57,7 +57,7 @@ spec:
               until nc -z admin 9191; do sleep 3; done
       containers:
         - name: outpatient
-          image: seohoryeong/his-outpatient:__IMAGE__
+          image: __IMAGE__
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
