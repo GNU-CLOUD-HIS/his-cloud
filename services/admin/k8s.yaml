@@ -1,0 +1,105 @@
+# [CI/CD] admin ConfigMap + Deployment + Service. 2026-10-27 서버에서 view-last-applied 로 꺼낸 값 그대로.
+# image 의 __IMAGE__ 는 services/admin/Jenkinsfile 이 sed 로 채운다. 이 파일을 직접 kubectl apply 하지 않는다.
+apiVersion: v1
+data:
+  SEAWEED_ENDPOINT: http://192.168.49.1:18891
+  SEAWEED_PUBLIC_BASE_URL: /files
+kind: ConfigMap
+metadata:
+  annotations: {}
+  name: admin-config
+  namespace: his
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations: {}
+  labels:
+    app: admin
+  name: admin
+  namespace: his
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: admin
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: admin
+    spec:
+      containers:
+      - env:
+        - name: SPRING_DATASOURCE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: SPRING_DATASOURCE_PASSWORD
+              name: admin-secret
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: REDIS_PASSWORD
+              name: redis-secret
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        envFrom:
+        - configMapRef:
+            name: his-common-config
+        - configMapRef:
+            name: admin-config
+        image: __IMAGE__
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          periodSeconds: 20
+          tcpSocket:
+            port: http
+        name: admin
+        ports:
+        - containerPort: 9191
+          name: http
+        readinessProbe:
+          failureThreshold: 3
+          periodSeconds: 10
+          tcpSocket:
+            port: http
+        resources:
+          limits:
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+        startupProbe:
+          failureThreshold: 60
+          periodSeconds: 5
+          tcpSocket:
+            port: http
+      enableServiceLinks: false
+      imagePullSecrets:
+      - name: dockerhub-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations: {}
+  name: admin
+  namespace: his
+spec:
+  ports:
+  - name: http
+    port: 9191
+    targetPort: http
+  selector:
+    app: admin
+  type: ClusterIP
