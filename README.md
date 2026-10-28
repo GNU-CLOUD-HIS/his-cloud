@@ -1,3 +1,43 @@
+# his-cloud — HIS 프로젝트 cloud 설정 보관 저장소
+
+> **보관·공부용 저장소입니다.** 여기서 배포를 돌리지 않습니다.
+> HIS 프로젝트의 **Jenkins · Docker · Kubernetes** 설정을 서비스별로 한곳에 모아 두었습니다.
+
+## 어디서 왔나
+
+- `SEOUL-IT-HIS/his-cicd` 를 커밋 기록까지 통째로 옮겨 왔습니다 (Jenkinsfile, k8s.yaml, 가이드 문서)
+- 그 뒤 각 서비스 저장소의 `Dockerfile`·`.dockerignore` 를 원본 그대로 복사해 넣었습니다
+
+## 서비스별 파일
+
+| 서비스 | 폴더 | Jenkins | Kubernetes | Docker (가져온 저장소@브랜치) |
+|---|---|---|---|---|
+| 인프라 (Redis·Kafka·SeaweedFS) | `infra/` | Jenkinsfile | common.yaml | - |
+| nginx (18090 입구) | `nginx/` | Jenkinsfile | k8s.yaml | - |
+| 프론트 | `frontend/` | Jenkinsfile | k8s.yaml | hisfrontend@nginx |
+| admin | `services/admin/` | Jenkinsfile | k8s.yaml | adminservice@develop |
+| billing | `services/billing/` | Jenkinsfile | k8s.yaml | billingservice@develop |
+| emergency | `services/emergency/` | Jenkinsfile | k8s.yaml | emergency-service@develop |
+| inpatient | `services/inpatient/` | Jenkinsfile | k8s.yaml | inpatient-service@Release |
+| lab-imaging | `services/labimaging/` | Jenkinsfile | k8s.yaml | lab-imaging-service@develop |
+| outpatient | `services/outpatient/` | Jenkinsfile | k8s.yaml | outpatient-service@develop |
+| patient | `services/patient/` | Jenkinsfile | (없음) | patient-service@develop |
+| pharmacy | `services/pharmacy/` | Jenkinsfile | k8s.yaml | pharmacyservice@develop |
+| reception | `services/reception/` | Jenkinsfile | k8s.yaml | reception-service@develop |
+| surgery | `services/surgery/` | Jenkinsfile | (없음) | surgery-service@develop |
+
+- Docker 브랜치는 각 Jenkinsfile 이 배포하던 브랜치를 따랐습니다. patient·surgery 는 Jenkinsfile 의 저장소 주소가 TODO 라서 develop 기준입니다
+- patient·surgery 는 옮겨 올 당시 `k8s.yaml` 이 아직 없었습니다. 그 상태 그대로 남겼습니다
+- 비밀번호·토큰은 들어 있지 않습니다. 실제 값은 서버 Secret 과 Jenkins Credentials 에만 있었습니다
+
+## 다시 돌려 보려면
+
+이 저장소를 Jenkins job 으로 쓰려면 job 의 Repository URL 을 이 저장소로 바꾸고, 각 Jenkinsfile 의 CFG(Docker Hub 아이디, agent, 담당자)를 본인 값으로 채워야 합니다. 절차는 `CICD_팀실습_가이드.md` 를 따릅니다.
+
+---
+
+아래는 `his-cicd` 시절(18090 팀 CI/CD 실습) README 원문입니다.
+
 # his-cicd — 18090(쿠버네티스) 팀 CI/CD 실습 저장소
 
 > **팀 CI/CD 실습 전용 저장소입니다.** 최종 배포(18080)와 무관합니다. 팀 프로젝트 규칙(PR·리뷰)은 적용하지 않고 `main`에 바로 push 합니다.
@@ -37,8 +77,8 @@
 ```
 infra/      Jenkinsfile, common.yaml
 nginx/      Jenkinsfile, k8s.yaml
-frontend/   Jenkinsfile, k8s.yaml
-services/<서비스>/   Jenkinsfile (CFG 6줄만 채움), k8s.yaml (각 담당자가 서버에서 꺼내 넣음)
+frontend/   Jenkinsfile, k8s.yaml, Dockerfile, .dockerignore
+services/<서비스>/   Jenkinsfile (CFG 6줄만 채움), k8s.yaml (각 담당자가 서버에서 꺼내 넣음), Dockerfile (+ .dockerignore)
 ```
 
 `k8s.yaml`의 `__IMAGE__`는 파이프라인이 채웁니다. 이 파일들을 직접 `kubectl apply` 하지 않습니다.
